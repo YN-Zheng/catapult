@@ -69,7 +69,9 @@ func (r *HarConvertorConfig) HarConvert(c *cli.Context) {
 	archive, err := OpenWritableArchive(r.outputFile)
 	if err == nil {
 		r := hargo.NewReader(file)
+		log.Println("Conversion started")
 		Dump(r, archive)
+		log.Println("Conversion completed")
 	} else {
 		log.Fatal("Cannot open output file: ", r.outputFile)
 	}
@@ -84,10 +86,6 @@ func Dump(r *bufio.Reader, archive *WritableArchive) error {
 
 	var har hargo.Har
 	dec.Decode(&har)
-
-	fmt.Println("HAR Version: " + har.Log.Version)
-	fmt.Println("Creator: ", har.Log.Creator.Name+" "+har.Log.Creator.Version)
-
 	for _, entry := range har.Log.Entries {
 
 		req, _ := hargo.EntryToRequest(&entry, false)
@@ -97,8 +95,6 @@ func Dump(r *bufio.Reader, archive *WritableArchive) error {
 		if err != nil {
 			fmt.Printf(err.Error())
 		}
-		// RecordRequest(request)
-
 	}
 	archive.Close()
 	return nil
@@ -114,8 +110,8 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 	}
 	var n int
 	// For responses corresponding to fonts/image files, response body in harfile is encoded into Base64.
-	// This bodies need to be decoded first
-	// (Alghough they will be encoded into Base64 later during Serilization)
+	// These bodies need to be decoded first
+	// (Alghough they will be encoded into Base64 later during archive.serializeRequest)
 	if ec := entry.Response.Content.Encoding; ec != "" {
 		if ec == "base64" {
 			decoded, err := base64.StdEncoding.DecodeString(entry.Response.Content.Text)

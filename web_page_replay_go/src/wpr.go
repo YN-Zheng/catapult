@@ -1,4 +1,6 @@
-//
+// Copyright 2017 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
 package main
 
 import (
@@ -497,9 +499,10 @@ func main() {
 	}
 	var convert ConvertorCommand
 	convert.cmd = cli.Command{
-		Name:   "convert",
-		Flags:  convert.cfg.Flags(),
-		Usage:  "Convert a legacy format to the new format",
+		Name:  "convert",
+		Flags: convert.cfg.Flags(),
+		// Usage:  "Convert a legacy format to the new format",
+		Usage:  "Convert a .har format to .wprgo format",
 		Action: convert.cfg.HarConvert, // origin: Convert
 	}
 
