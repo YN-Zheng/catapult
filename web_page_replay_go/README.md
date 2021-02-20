@@ -38,6 +38,15 @@ go mod init github.com/catapult-project
 
 ## Sample usage
 
+### Convert
+
+```bash
+cd path/to/web_page_replay_go
+go run src/wpr.go convert --har_file=/tmp/webdata/example.har --output_file=/tmp/example_converted.wprgo
+```
+
+
+
 ### Record mode
 * Terminal 1:
 

@@ -1,8 +1,6 @@
 // Copyright 2017 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-// Program wpr records and replays web traffic.
 package main
 
 import (
@@ -496,15 +494,16 @@ func main() {
 
 	// TODO(xunjieli): Remove ConvertorCommand once crbug.com/730036 is done.
 	type ConvertorCommand struct {
-		cfg webpagereplay.ConvertorConfig
+		cfg webpagereplay.HarConvertorConfig //origin: ConvertorConfig
 		cmd cli.Command
 	}
 	var convert ConvertorCommand
 	convert.cmd = cli.Command{
-		Name:   "convert",
-		Flags:  convert.cfg.Flags(),
-		Usage:  "Convert a legacy format to the new format",
-		Action: convert.cfg.Convert,
+		Name:  "convert",
+		Flags: convert.cfg.Flags(),
+		// Usage:  "Convert a legacy format to the new format",
+		Usage:  "Convert a .har format to .wprgo format",
+		Action: convert.cfg.HarConvert, // origin: Convert
 	}
 
 	app := cli.NewApp()
