@@ -67,14 +67,13 @@ func (r *HarConvertorConfig) HarConvert(c *cli.Context) {
 	}
 
 	archive, err := OpenWritableArchive(r.outputFile)
-	if err == nil {
-		r := hargo.NewReader(file)
-		log.Println("Conversion started")
-		Dump(r, archive)
-		log.Println("Conversion completed")
-	} else {
+	if err != nil {
 		log.Fatal("Cannot open output file: ", r.outputFile)
 	}
+	f := hargo.NewReader(file)
+	log.Println("Conversion started")
+	Dump(f, archive)
+	log.Println("Conversion completed")
 
 }
 
@@ -119,6 +118,8 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 				log.Fatal(err)
 			}
 			entry.Response.Content.Text = string(decoded)
+		} else {
+			log.Printf("Missing encoding in harfile: %s", ec)
 		}
 	}
 
@@ -131,7 +132,8 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 			log.Fatal("Multiple content_encoding")
 		}
 		contentEncoding := contentEncodings[0]
-		if contentEncoding == "gzip" || contentEncoding == "x_gzip" {
+		switch contentEncoding {
+		case "gzip", "x_gzip":
 			var b bytes.Buffer
 			gz := gzip.NewWriter(&b)
 			if _, err := gz.Write([]byte(entry.Response.Content.Text)); err != nil {
@@ -141,6 +143,12 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 				log.Fatal(err)
 			}
 			n, _ = rw.Body.Write(b.Bytes())
+		case "deflate":
+			log.Fatal("Missing Content-Encoding： deflate")
+		case "br":
+			log.Fatal("Missing Content-Encoding:  br")
+		default:
+			log.Fatal("Missing Content-Encoding:  " + contentEncoding)
 		}
 		//TODO: br, deflate...
 
