@@ -15,6 +15,8 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	urlpkg "net/url"
+
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -180,6 +182,11 @@ func (archive *WritableArchive) AppendHar(har hargo.Har) error {
 }
 
 func assertCompleteEntry(entry hargo.Entry) bool {
+	_, err := urlpkg.Parse(entry.Request.URL)
+	if err != nil {
+		log.Println(err.Error())
+		return false
+	}
 	if entry.Time > 50000 || entry.Request.Method == "" {
 		log.Println("damaged entry")
 		return false
@@ -245,14 +252,14 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 			}
 		case "br":
 			log.Fatal("Missing Content-Encoding:  br")
-		case "identity", "none":
+		case "identity", "none", "utf8":
 			w := bufio.NewWriter(&b)
 			if _, err = w.Write([]byte(entry.Response.Content.Text)); err != nil {
 				log.Fatal(err)
 			}
 			w.Flush()
 		default:
-			log.Fatal("Missing Content-Encoding:  " + contentEncoding)
+			log.Println("Missing Content-Encoding:  " + contentEncoding)
 		}
 
 		n, _ = rw.Body.Write(b.Bytes())
