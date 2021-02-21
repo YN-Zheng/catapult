@@ -31,7 +31,7 @@
                 "replay",
                 "--http_port=8080",
                 "--https_port=8081",
-                "/tmp/webdata/amazon_converted.wprgo"
+                "/tmp/webdata/HttpArchive.wprgo"
             ]
         },
         {
@@ -44,7 +44,7 @@
             "showLog": false,
             "args": [
                 "convert",
-                "--har_file=/tmp/webdata/amazon.har",
+                "--har_file=/tmp/webdata/HttpArchive",
                 "--https_cert_file=wpr_cert.pem",
                 "--https_key_file=wpr_key.pem"
             ]

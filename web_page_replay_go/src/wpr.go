@@ -502,7 +502,7 @@ func main() {
 		Name:  "convert",
 		Flags: convert.cfg.Flags(),
 		// Usage:  "Convert a legacy format to the new format",
-		Usage:  "Convert a .har format to .wprgo format",
+		Usage:  "Convert .har format to .wprgo format",
 		Action: convert.cfg.HarConvert, // origin: Convert
 	}
 
