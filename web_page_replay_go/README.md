@@ -45,7 +45,7 @@ cd path/to/web_page_replay_go
 go run src/wpr.go convert --har_file=/tmp/webdata/example.har
 ```
 
-*convert all har.gz files in one directory
+* convert all har.gz files in one directory
 ```bash
 cd path/to/web_page_replay_go
 go run src/wpr.go convert --har_file=/tmp/webdata/HttpArchive
