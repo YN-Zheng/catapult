@@ -39,12 +39,17 @@ go mod init github.com/catapult-project
 ## Sample usage
 
 ### Convert
-
+* convert single file
 ```bash
 cd path/to/web_page_replay_go
-go run src/wpr.go convert --har_file=/tmp/webdata/example.har --output_file=/tmp/example_converted.wprgo
+go run src/wpr.go convert --har_file=/tmp/webdata/example.har
 ```
 
+*convert all har.gz files in one directory
+```bash
+cd path/to/web_page_replay_go
+go run src/wpr.go convert --har_file=/tmp/webdata/HttpArchive
+```
 
 
 ### Record mode
@@ -81,7 +86,7 @@ go run src/wpr.go convert --har_file=/tmp/webdata/example.har --output_file=/tmp
 * Terminal 2:
   ```
   google-chrome-beta --user-data-dir=$bar \
-   --host-resolver-rules="MAP *:80 127.0.0.1:8080,MAP *:443 127.0.0.1:8081,EXCLUDE localhost"
+   --host-resolver-rules="MAP *:80 127.0.0.1:8080,MAP *:443 127.0.0.1:8081,EXCLUDE localhost" \
    --ignore-certificate-errors-spki-list=PhrPvGIaAMmd29hj8BCZOq096yj7uMpRNHpn5PDxI6I=
   ```
   ... wait for replay servers to start

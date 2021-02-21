@@ -180,7 +180,7 @@ func (archive *WritableArchive) AppendHar(har hargo.Har) error {
 }
 
 func assertCompleteEntry(entry hargo.Entry) bool {
-	if entry.Time > 50000 && entry.Request.Method == "" {
+	if entry.Time > 50000 || entry.Request.Method == "" {
 		log.Println("damaged entry")
 		return false
 	}
@@ -245,7 +245,7 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 			}
 		case "br":
 			log.Fatal("Missing Content-Encoding:  br")
-		case "identity":
+		case "identity", "none":
 			w := bufio.NewWriter(&b)
 			if _, err = w.Write([]byte(entry.Response.Content.Text)); err != nil {
 				log.Fatal(err)
