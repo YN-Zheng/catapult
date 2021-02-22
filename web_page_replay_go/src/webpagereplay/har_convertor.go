@@ -71,7 +71,7 @@ func (cfg *HarConvertorConfig) HarConvert(c *cli.Context) {
 	}
 	archive, err := OpenWritableArchive(cfg.outputFile)
 	if err != nil {
-		log.Fatal("Cannot open output file: ", cfg.outputFile)
+		log.Fatal(err.Error())
 	}
 
 	// convert .har file(s).Note that cfg.harFile can be a folder or a single file
@@ -188,7 +188,7 @@ func assertCompleteEntry(entry hargo.Entry) bool {
 		return false
 	}
 	if entry.Time > 50000 || entry.Request.Method == "" {
-		log.Println("damaged entry")
+		log.Printf("Damaged entry. Time: %.0f ms URL: %s", entry.Time, entry.Request.URL)
 		return false
 	}
 	return true
@@ -252,7 +252,7 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 			}
 		case "br":
 			log.Fatal("Missing Content-Encoding:  br")
-		case "identity", "none", "utf8":
+		case "identity", "none", "utf8", "UTF-8", "utf-8", "":
 			w := bufio.NewWriter(&b)
 			if _, err = w.Write([]byte(entry.Response.Content.Text)); err != nil {
 				log.Fatal(err)
