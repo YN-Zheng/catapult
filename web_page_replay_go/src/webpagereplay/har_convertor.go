@@ -15,7 +15,8 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	urlpkg "net/url"
+	"net/url"
+	"strconv"
 
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/mrichman/hargo"
 	"github.com/urfave/cli"
+	"golang.org/x/net/http/httpguts"
 )
 
 type HarConvertorConfig struct {
@@ -64,16 +66,6 @@ func (cfg *HarConvertorConfig) Flags() []cli.Flag {
 
 func (cfg *HarConvertorConfig) HarConvert(c *cli.Context) {
 
-	// open a writable archive
-	//
-	if cfg.outputFile == "" {
-		cfg.outputFile = cfg.harFile + ".wprgo"
-	}
-	archive, err := OpenWritableArchive(cfg.outputFile)
-	if err != nil {
-		log.Fatal(err.Error())
-	}
-
 	// convert .har file(s).Note that cfg.harFile can be a folder or a single file
 	fi, err := os.Stat(cfg.harFile)
 	if err != nil {
@@ -82,55 +74,78 @@ func (cfg *HarConvertorConfig) HarConvert(c *cli.Context) {
 	switch mode := fi.Mode(); {
 	case mode.IsDir():
 		// if convert all .har.gz files in one folder: HttpArchive -> HttpArchive.wprgo
-		archive.convertHars(cfg)
+		convertHars(cfg)
 	case mode.IsRegular():
 		// if convert single har file: example.har -> example.har.wprgo
-		archive.convertSingleHar(cfg)
+		convertSingleHar(cfg)
 	}
-	archive.Close()
 	log.Println("Conversion completed")
 
 }
 
 // convertHars will convert all har.gz files into one .wprgo archive.
 // example: cfg.harFile = 'tmp/HttpArchive'.
-// Then all *.har.gz in directory 'tmp/HttpArchive' will be read and write into tmp/HttpArchive.wprgo
-// A 'hostnames.txt' will also be generated in that directory, summarying all websites that has been recored in .wprgo Archive.
-func (archive *WritableArchive) convertHars(cfg *HarConvertorConfig) {
-
-	// dealing with downloaded har.gz files using gsutil
-	gzfiles, err := ioutil.ReadDir(cfg.harFile)
+// Then all *.har.gz in directory 'tmp/HttpArchive' will be read and write into tmp/HttpArchive/wprgo/*.wprgo
+// 'hostnames/*.txt' will also be generated in that directory, summarying all websites that has been recored in *.wprgo Archive.
+func convertHars(cfg *HarConvertorConfig) {
+	os.Mkdir(cfg.harFile+"/wprgo/", 0700)
+	os.Mkdir(cfg.harFile+"/hostnames/", 0700)
+	// make a list of *.har.gz files
+	files, err := ioutil.ReadDir(cfg.harFile)
+	gzs := make([]os.FileInfo, len(files))
+	j := 0
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".har.gz") {
+			gzs[j] = f
+			j++
+		}
+	}
+	gzs = gzs[:j]
 	if err != nil {
 		log.Fatal(err)
 	}
-	var hostnames []string
-	for i, gzfile := range gzfiles {
-		if !strings.HasSuffix(gzfile.Name(), ".har.gz") {
-			continue
-		}
-		gf, _ := os.Open(cfg.harFile + "/" + gzfile.Name())
-		defer gf.Close()
-		f, err := gzip.NewReader(gf)
-		defer f.Close()
+	// divide into groups
+	capacity := 10
+	groups := len(gzs)/capacity + 1
+	log.Printf("Conversion started: %d files per group, %d files in total", capacity, len(gzs))
+	for i := 0; i < groups; i++ {
+		archive, err := OpenWritableArchive(cfg.harFile + "/wprgo/" + strconv.Itoa(i) + ".wprgo")
+		defer archive.Close()
 		if err != nil {
-			log.Fatal("Cannot open har file: ", cfg.harFile)
+			log.Fatal(err.Error())
 		}
-		dec := json.NewDecoder(hargo.NewReader(f))
-		var har hargo.Har
-		dec.Decode(&har)
+		var gzfiles []os.FileInfo
+		if i == groups-1 {
+			gzfiles = gzs[i*capacity:]
+		} else {
+			gzfiles = gzs[i*capacity : (i+1)*capacity]
+		}
+		log.Printf("Converting: Group %d / %d. \n", i, groups)
+		hostnames := make([]string, len(gzfiles))
+		// Convert
+		for j, gzfile := range gzfiles {
+			var har hargo.Har
+			decode(&har, cfg.harFile+"/"+gzfile.Name())
+			archive.AppendHar(har)
+			hostnames[j] = har.Log.Entries[0].Request.URL + "," + gzfile.Name()
+		}
+		if err := writeLines(hostnames, cfg.harFile+"/hostnames/"+strconv.Itoa(i)+".txt"); err != nil {
+			log.Fatalf("writeLines: %s", err)
+		}
+	}
+	log.Printf("Convert %d har files in total.\n", len(gzs))
+}
 
-		log.Println("Conversion started: " + gzfile.Name())
-		archive.AppendHar(har)
-		hostnames = append(hostnames, har.Log.Entries[0].Request.URL)
-		if i > 1000 { // TODO test how many har files can be stored in one archive.wprgo file
-			break
-		}
+func decode(har *hargo.Har, path string) {
+	gf, _ := os.Open(path)
+	defer gf.Close()
+	f, err := gzip.NewReader(gf)
+	defer f.Close()
+	if err != nil {
+		log.Fatal(err.Error())
 	}
-	// write converted hostnames (for replay)
-	if err := writeLines(hostnames, cfg.harFile+"/"+"hostnames.txt"); err != nil {
-		log.Fatalf("writeLines: %s", err)
-	}
-	log.Printf("Convert %d har files in total.\n", len(hostnames))
+	dec := json.NewDecoder(hargo.NewReader(f))
+	dec.Decode(&har)
 }
 
 // writeLines writes the lines to the given file.
@@ -147,7 +162,15 @@ func writeLines(lines []string, path string) error {
 	return w.Flush()
 }
 
-func (archive *WritableArchive) convertSingleHar(cfg *HarConvertorConfig) {
+func convertSingleHar(cfg *HarConvertorConfig) {
+	// open a writable archive
+	if cfg.outputFile == "" {
+		cfg.outputFile = cfg.harFile + ".wprgo"
+	}
+	archive, err := OpenWritableArchive(cfg.outputFile)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
 	f, err := os.Open(cfg.harFile)
 	defer f.Close()
 	if err != nil {
@@ -159,6 +182,7 @@ func (archive *WritableArchive) convertSingleHar(cfg *HarConvertorConfig) {
 
 	log.Println("Conversion started")
 	archive.AppendHar(har)
+	archive.Close()
 }
 
 // AppendHar parse harfile into http.Archive which can be saved as *.wprgo
@@ -170,7 +194,7 @@ func (archive *WritableArchive) AppendHar(har hargo.Har) error {
 		if !assertCompleteEntry(entry) {
 			continue
 		}
-		req, _ := hargo.EntryToRequest(&entry, false)
+		req, _ := EntryToRequest(&entry, false)
 		resp, _ := EntryToResponse(&entry, req)
 
 		err := archive.RecordRequest(req, resp)
@@ -182,7 +206,7 @@ func (archive *WritableArchive) AppendHar(har hargo.Har) error {
 }
 
 func assertCompleteEntry(entry hargo.Entry) bool {
-	_, err := urlpkg.Parse(entry.Request.URL)
+	_, err := url.Parse(entry.Request.URL)
 	if err != nil {
 		log.Println(err.Error())
 		return false
@@ -281,4 +305,67 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 	// Could be slightly different with the real situation.(since we compress data manually using gzip.... in golang)
 	resp.ContentLength = int64(n)
 	return resp, nil
+}
+
+// EntryToRequest parse a harfile entry into a http.Response
+// it's the same as hargo.EntryToRequest, without checking cookies' name and value
+func EntryToRequest(entry *hargo.Entry, ignoreHarCookies bool) (*http.Request, error) {
+	body := ""
+
+	if len(entry.Request.PostData.Params) == 0 {
+		body = entry.Request.PostData.Text
+	} else {
+		form := url.Values{}
+		for _, p := range entry.Request.PostData.Params {
+			form.Add(p.Name, p.Value)
+		}
+		body = form.Encode()
+	}
+
+	req, _ := http.NewRequest(entry.Request.Method, entry.Request.URL, bytes.NewBuffer([]byte(body)))
+
+	for _, h := range entry.Request.Headers {
+		if httpguts.ValidHeaderFieldName(h.Name) && httpguts.ValidHeaderFieldValue(h.Value) && h.Name != "Cookie" {
+			req.Header.Add(h.Name, h.Value)
+		}
+	}
+
+	if !ignoreHarCookies {
+		for _, c := range entry.Request.Cookies {
+			cookie := &http.Cookie{Name: c.Name, Value: c.Value, HttpOnly: false, Domain: c.Domain}
+			addCookie(req, cookie) //
+		}
+	}
+
+	return req, nil
+}
+
+func addCookie(r *http.Request, c *http.Cookie) {
+	s := fmt.Sprintf("%s=%s", sanitizeCookieName(c.Name), sanitizeCookieValue(c.Value))
+	if c := r.Header.Get("Cookie"); c != "" {
+		r.Header.Set("Cookie", c+"; "+s)
+	} else {
+		r.Header.Set("Cookie", s)
+	}
+}
+
+func sanitizeCookieValue(v string) string {
+	// v = sanitizeOrWarn("Cookie.Value", validCookieValueByte, v)
+	if len(v) == 0 {
+		return v
+	}
+	if strings.IndexByte(v, ' ') >= 0 || strings.IndexByte(v, ',') >= 0 {
+		return `"` + v + `"`
+	}
+	return v
+}
+
+func validCookieValueByte(b byte) bool {
+	return 0x20 <= b && b < 0x7f && b != '"' && b != ';' && b != '\\'
+}
+
+var cookieNameSanitizer = strings.NewReplacer("\n", "-", "\r", "-")
+
+func sanitizeCookieName(n string) string {
+	return cookieNameSanitizer.Replace(n)
 }
