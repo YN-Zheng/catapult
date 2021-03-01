@@ -129,19 +129,7 @@ func convertHars(harFile string) {
 	hostnames = make([]string, capacity)
 	log.Printf("Conversion started: %d files per group, %d files in total", capacity, len(gzs))
 	for i, gzfile := range gzs {
-		if j == capacity {
-			log.Printf("Saving group %d \t -- %d/%d -- %d large files in list", group, i, len(gzs), len(largeFiles))
-			if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(i)+".txt"); err != nil {
-				log.Fatalf("writeLines: %s", err)
-			}
-			runtime.GC()
-			archive.Close()
-			if archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo"); err != nil {
-				log.Fatalf("openWriteableArchive: %s", err)
-			}
-			hostnames = make([]string, capacity)
-			group++
-		}
+
 		gf, _ := os.Open(harFile + "/" + gzfile.Name())
 		f, err := gzip.NewReader(gf)
 		if err != nil {
@@ -151,16 +139,30 @@ func convertHars(harFile string) {
 		// if har file too large, skip and put them in a list. They will be converted later
 		if len(bytes) > 10*MB {
 			largeFiles = append(largeFiles, gzfile)
-			log.Printf("Skip Large:\t %d : %s--%dKB\n", i, gzfile.Name(), len(bytes)>>10)
+			log.Printf("Skip Large:\t%d\t : %s--%dKB\n", i, gzfile.Name(), len(bytes)>>10)
 			continue
 		}
-		log.Printf("Converting:\t%d : %s--%dKB\n", i, gzfile.Name(), len(bytes)>>10)
+		log.Printf("Converting:\t%d\t : %s--%dKB\n", i, gzfile.Name(), len(bytes)>>10)
 		json.Unmarshal(bytes, &har)
 		gf.Close()
 		f.Close()
 		archive.AppendHar(har)
 		hostnames[j] = har.Log.Entries[0].Request.URL + "," + gzfile.Name()
-		j++
+		if j++; i == len(gzs)-1 || j == capacity {
+			log.Printf("Saving group %d \t -- %d/%d. %d large files in list", group, i+1-len(largeFiles), len(gzs), len(largeFiles))
+			if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(group)+".txt"); err != nil {
+				log.Fatalf("writeLines: %s", err)
+			}
+			runtime.GC()
+			archive.Close()
+			group++
+			if i != len(gzs)-1 {
+				if archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo"); err != nil {
+					log.Fatalf("openWriteableArchive: %s", err)
+				}
+				hostnames = make([]string, capacity)
+			}
+		}
 	}
 	log.Printf("Convert %d har files in total.\n Start converting %d large file\n", len(gzs), len(largeFiles))
 	for i, f := range largeFiles {
@@ -169,15 +171,14 @@ func convertHars(harFile string) {
 			log.Fatalf("openWriteableArchive: %s", err)
 		}
 		decode(&har, harFile+"/"+f.Name())
-		hostnames = make([]string, 0)
+		hostnames = make([]string, 1)
 		archive.AppendHar(har)
 		hostnames[0] = har.Log.Entries[0].Request.URL + "," + f.Name()
 		runtime.GC()
 		archive.Close()
-		if archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo"); err != nil {
-			log.Fatalf("openWriteableArchive: %s", err)
+		if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(group)+".txt"); err != nil {
+			log.Fatalf("writeLines: %s", err)
 		}
-		hostnames = make([]string, 0)
 		group++
 	}
 }
