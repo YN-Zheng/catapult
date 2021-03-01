@@ -16,6 +16,8 @@ import (
 	"io/ioutil"
 	"log"
 	"net/url"
+	"runtime"
+	"sort"
 	"strconv"
 
 	"net/http"
@@ -83,15 +85,8 @@ func (cfg *HarConvertorConfig) HarConvert(c *cli.Context) {
 
 }
 
-// convertHars will convert all har.gz files into one .wprgo archive.
-// example: cfg.harFile = 'tmp/HttpArchive'.
-// Then all *.har.gz in directory 'tmp/HttpArchive' will be read and write into tmp/HttpArchive/wprgo/*.wprgo
-// 'hostnames/*.txt' will also be generated in that directory, summarying all websites that has been recored in *.wprgo Archive.
-func convertHars(cfg *HarConvertorConfig) {
-	os.Mkdir(cfg.harFile+"/wprgo/", 0700)
-	os.Mkdir(cfg.harFile+"/hostnames/", 0700)
-	// make a list of *.har.gz files
-	files, err := ioutil.ReadDir(cfg.harFile)
+func listHarGz(harFile string) []os.FileInfo {
+	files, err := ioutil.ReadDir(harFile)
 	gzs := make([]os.FileInfo, len(files))
 	j := 0
 	for _, f := range files {
@@ -104,48 +99,74 @@ func convertHars(cfg *HarConvertorConfig) {
 	if err != nil {
 		log.Fatal(err)
 	}
+	sort.Slice(gzs, func(i, j int) bool {
+		return strings.Compare(gzs[i].Name(), gzs[j].Name()) == -1
+	})
+	return gzs
+}
+
+// convertHars will convert all har.gz files into one .wprgo archive.
+// example: cfg.harFile = 'tmp/HttpArchive'.
+// Then all *.har.gz in directory 'tmp/HttpArchive' will be read and write into tmp/HttpArchive/wprgo/*.wprgo
+// 'hostnames/*.txt' will also be generated in that directory, summarying all websites that has been recored in *.wprgo Archive.
+func convertHars(cfg *HarConvertorConfig) {
+	os.Mkdir(cfg.harFile+"/wprgo/", 0700)
+	os.Mkdir(cfg.harFile+"/hostnames/", 0700)
+	// make a list of *.har.gz files
+	gzs := listHarGz(cfg.harFile)
 	// divide into groups
-	capacity := 10
+	capacity := 50
 	groups := len(gzs)/capacity + 1
 	log.Printf("Conversion started: %d files per group, %d files in total", capacity, len(gzs))
+	var gzfiles []os.FileInfo
+	var har hargo.Har
+	// decode(&har, cfg.harFile+"/160401_10_M0KQ.har.gz")
 	for i := 0; i < groups; i++ {
 		archive, err := OpenWritableArchive(cfg.harFile + "/wprgo/" + strconv.Itoa(i) + ".wprgo")
-		defer archive.Close()
 		if err != nil {
 			log.Fatal(err.Error())
 		}
-		var gzfiles []os.FileInfo
 		if i == groups-1 {
 			gzfiles = gzs[i*capacity:]
 		} else {
 			gzfiles = gzs[i*capacity : (i+1)*capacity]
 		}
-		log.Printf("Converting: Group %d / %d. \n", i, groups)
+		var size int64
+		for _, file := range gzfiles {
+			size += file.Size()
+		}
+		log.Printf("Converting: Group %d / %d. Total size: %d KB\n", i, groups, size>>10)
 		hostnames := make([]string, len(gzfiles))
 		// Convert
 		for j, gzfile := range gzfiles {
-			var har hargo.Har
+			log.Printf("%d : %s--%dKB\n", j, gzfile.Name(), gzfile.Size()>>10)
 			decode(&har, cfg.harFile+"/"+gzfile.Name())
 			archive.AppendHar(har)
 			hostnames[j] = har.Log.Entries[0].Request.URL + "," + gzfile.Name()
+
 		}
 		if err := writeLines(hostnames, cfg.harFile+"/hostnames/"+strconv.Itoa(i)+".txt"); err != nil {
 			log.Fatalf("writeLines: %s", err)
 		}
+		runtime.GC()
+		// debug.FreeOSMemory()
+		archive.Close()
 	}
 	log.Printf("Convert %d har files in total.\n", len(gzs))
 }
 
 func decode(har *hargo.Har, path string) {
 	gf, _ := os.Open(path)
-	defer gf.Close()
 	f, err := gzip.NewReader(gf)
-	defer f.Close()
 	if err != nil {
 		log.Fatal(err.Error())
 	}
-	dec := json.NewDecoder(hargo.NewReader(f))
-	dec.Decode(&har)
+	// dec := json.NewDecoder(hargo.NewReader(f))
+	// dec.Decode(&har)
+	bytes, _ := io.ReadAll(hargo.NewReader(f))
+	json.Unmarshal(bytes, &har)
+	gf.Close()
+	f.Close()
 }
 
 // writeLines writes the lines to the given file.
@@ -206,15 +227,20 @@ func (archive *WritableArchive) AppendHar(har hargo.Har) error {
 }
 
 func assertCompleteEntry(entry hargo.Entry) bool {
-	_, err := url.Parse(entry.Request.URL)
+	u, err := url.Parse(entry.Request.URL)
 	if err != nil {
 		log.Println(err.Error())
 		return false
 	}
-	if entry.Time > 50000 || entry.Request.Method == "" {
-		log.Printf("Damaged entry. Time: %.0f ms URL: %s", entry.Time, entry.Request.URL)
+	if u.Host == "" || u.Scheme == "" || entry.Request.Method == "" {
+		log.Printf("Damaged entry -- incomplete Request: %s %s", entry.Request.Method, entry.Request.URL)
 		return false
 	}
+	if entry.Time > 50000 {
+		log.Printf("Damaged entry -- timeout: %.0f ms %s URL: %s", entry.Time, entry.Request.Method, entry.Request.URL)
+		return false
+	}
+
 	return true
 }
 
@@ -258,28 +284,28 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 		case "gzip", "x_gzip":
 			wc = gzip.NewWriter(&b)
 			if _, err = wc.Write([]byte(entry.Response.Content.Text)); err != nil {
-				log.Fatal(err)
+				log.Fatal("EntryToResponse:" + err.Error())
 			}
 			if err = wc.Close(); err != nil {
-				log.Fatal(err)
+				log.Fatal("EntryToResponse:" + err.Error())
 			}
 		case "deflate":
 			wc, err = flate.NewWriter(&b, -1)
 			if err != nil {
-				log.Fatal(err)
+				log.Fatal("EntryToResponse:" + err.Error())
 			}
 			if _, err = wc.Write([]byte(entry.Response.Content.Text)); err != nil {
-				log.Fatal(err)
+				log.Fatal("EntryToResponse:" + err.Error())
 			}
 			if err = wc.Close(); err != nil {
-				log.Fatal(err)
+				log.Fatal("EntryToResponse:" + err.Error())
 			}
 		case "br":
 			log.Fatal("Missing Content-Encoding:  br")
 		case "identity", "none", "utf8", "UTF-8", "utf-8", "":
 			w := bufio.NewWriter(&b)
 			if _, err = w.Write([]byte(entry.Response.Content.Text)); err != nil {
-				log.Fatal(err)
+				log.Fatal("EntryToResponse:" + err.Error())
 			}
 			w.Flush()
 		default:
