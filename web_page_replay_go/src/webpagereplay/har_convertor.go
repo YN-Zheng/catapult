@@ -39,6 +39,10 @@ type HarConvertorConfig struct {
 	x509Cert *x509.Certificate
 }
 
+const (
+	MB = 1 << 20
+)
+
 func (cfg *HarConvertorConfig) Flags() []cli.Flag {
 	return []cli.Flag{
 		cli.StringFlag{
@@ -76,7 +80,7 @@ func (cfg *HarConvertorConfig) HarConvert(c *cli.Context) {
 	switch mode := fi.Mode(); {
 	case mode.IsDir():
 		// if convert all .har.gz files in one folder: HttpArchive -> HttpArchive.wprgo
-		convertHars(cfg)
+		convertHars(cfg.harFile)
 	case mode.IsRegular():
 		// if convert single har file: example.har -> example.har.wprgo
 		convertSingleHar(cfg)
@@ -109,50 +113,73 @@ func listHarGz(harFile string) []os.FileInfo {
 // example: cfg.harFile = 'tmp/HttpArchive'.
 // Then all *.har.gz in directory 'tmp/HttpArchive' will be read and write into tmp/HttpArchive/wprgo/*.wprgo
 // 'hostnames/*.txt' will also be generated in that directory, summarying all websites that has been recored in *.wprgo Archive.
-func convertHars(cfg *HarConvertorConfig) {
-	os.Mkdir(cfg.harFile+"/wprgo/", 0700)
-	os.Mkdir(cfg.harFile+"/hostnames/", 0700)
+func convertHars(harFile string) {
+	os.Mkdir(harFile+"/wprgo/", 0700)
+	os.Mkdir(harFile+"/hostnames/", 0700)
 	// make a list of *.har.gz files
-	gzs := listHarGz(cfg.harFile)
-	// divide into groups
-	capacity := 50
-	groups := len(gzs)/capacity + 1
-	log.Printf("Conversion started: %d files per group, %d files in total", capacity, len(gzs))
-	var gzfiles []os.FileInfo
+	gzs := listHarGz(harFile)
 	var har hargo.Har
-	// decode(&har, cfg.harFile+"/160401_10_M0KQ.har.gz")
-	for i := 0; i < groups; i++ {
-		archive, err := OpenWritableArchive(cfg.harFile + "/wprgo/" + strconv.Itoa(i) + ".wprgo")
+	var archive *WritableArchive
+	var err error
+	var hostnames []string
+	var largeFiles []os.FileInfo
+	// divide into groups
+	capacity, group, j := 1000, 0, 0
+	archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo")
+	hostnames = make([]string, capacity)
+	log.Printf("Conversion started: %d files per group, %d files in total", capacity, len(gzs))
+	for i, gzfile := range gzs {
+		if j == capacity {
+			log.Printf("Saving group %d \t -- %d/%d -- %d large files in list", group, i, len(gzs), len(largeFiles))
+			if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(i)+".txt"); err != nil {
+				log.Fatalf("writeLines: %s", err)
+			}
+			runtime.GC()
+			archive.Close()
+			if archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo"); err != nil {
+				log.Fatalf("openWriteableArchive: %s", err)
+			}
+			hostnames = make([]string, capacity)
+			group++
+		}
+		gf, _ := os.Open(harFile + "/" + gzfile.Name())
+		f, err := gzip.NewReader(gf)
 		if err != nil {
 			log.Fatal(err.Error())
 		}
-		if i == groups-1 {
-			gzfiles = gzs[i*capacity:]
-		} else {
-			gzfiles = gzs[i*capacity : (i+1)*capacity]
+		bytes, _ := io.ReadAll(hargo.NewReader(f))
+		// if har file too large, skip and put them in a list. They will be converted later
+		if len(bytes) > 10*MB {
+			largeFiles = append(largeFiles, gzfile)
+			log.Printf("Skip Large:\t %d : %s--%dKB\n", i, gzfile.Name(), len(bytes)>>10)
+			continue
 		}
-		var size int64
-		for _, file := range gzfiles {
-			size += file.Size()
-		}
-		log.Printf("Converting: Group %d / %d. Total size: %d KB\n", i, groups, size>>10)
-		hostnames := make([]string, len(gzfiles))
-		// Convert
-		for j, gzfile := range gzfiles {
-			log.Printf("%d : %s--%dKB\n", j, gzfile.Name(), gzfile.Size()>>10)
-			decode(&har, cfg.harFile+"/"+gzfile.Name())
-			archive.AppendHar(har)
-			hostnames[j] = har.Log.Entries[0].Request.URL + "," + gzfile.Name()
-
-		}
-		if err := writeLines(hostnames, cfg.harFile+"/hostnames/"+strconv.Itoa(i)+".txt"); err != nil {
-			log.Fatalf("writeLines: %s", err)
-		}
-		runtime.GC()
-		// debug.FreeOSMemory()
-		archive.Close()
+		log.Printf("Converting:\t%d : %s--%dKB\n", i, gzfile.Name(), len(bytes)>>10)
+		json.Unmarshal(bytes, &har)
+		gf.Close()
+		f.Close()
+		archive.AppendHar(har)
+		hostnames[j] = har.Log.Entries[0].Request.URL + "," + gzfile.Name()
+		j++
 	}
-	log.Printf("Convert %d har files in total.\n", len(gzs))
+	log.Printf("Convert %d har files in total.\n Start converting %d large file\n", len(gzs), len(largeFiles))
+	for i, f := range largeFiles {
+		log.Printf("Converting %s (%d/%d)", f.Name(), i, len(largeFiles))
+		if archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo"); err != nil {
+			log.Fatalf("openWriteableArchive: %s", err)
+		}
+		decode(&har, harFile+"/"+f.Name())
+		hostnames = make([]string, 0)
+		archive.AppendHar(har)
+		hostnames[0] = har.Log.Entries[0].Request.URL + "," + f.Name()
+		runtime.GC()
+		archive.Close()
+		if archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo"); err != nil {
+			log.Fatalf("openWriteableArchive: %s", err)
+		}
+		hostnames = make([]string, 0)
+		group++
+	}
 }
 
 func decode(har *hargo.Har, path string) {
