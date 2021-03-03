@@ -127,16 +127,27 @@ func convertHars(harFile string) {
 		hostnames []string
 		err       error
 		m         runtime.MemStats
+		mT        uint64
 	)
 
 	// divide into groups
-	group, groupSize := 0, 0
-	archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo")
+	groupSize := 0
+	mT = (v.Total - v.Active) / 3
+	runtime.ReadMemStats(&m)
+
 	hostnames = make([]string, 0)
-	log.Printf("Conversion started: %d files in total", len(gzs))
+	group, fileNumber := continueFromLog("./nohup.out")
+	if group == 0 {
+		log.Printf("Conversion started: %d files in total. Initial activate memory: %dMB. Thread hold: %dMB", len(gzs), v.Active>>20, mT>>20)
+	} else {
+		log.Printf("Conversion continued from group: %5d, file: %5d", group, fileNumber)
+	}
+	archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo")
 	for i, gzfile := range gzs {
-		// log.Printf("Alloc: %5dMB/%d", m.HeapAlloc>>20, v.Total>>20)
-		if groupSize>>20 > 300 && m.Alloc > v.Total/3 {
+		if i < fileNumber {
+			continue
+		}
+		if groupSize>>20 > 300 {
 			log.Printf("Saving group %d(%d files) \t -- %d/%d ", group, len(hostnames), i, len(gzs))
 			if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(group)+".txt"); err != nil {
 				log.Fatalf("writeLines: %s", err)
@@ -168,6 +179,42 @@ func convertHars(harFile string) {
 	}
 }
 
+func continueFromLog(logPath string) (int, int) {
+	// e.g. :2021/03/02 11:28:13 Saving group 60(157 files) 	 -- 10062/491484
+	// return: group = 60, fileNumber = 10062
+	lines, err := readLines(logPath)
+	var group, fileNumber int
+	if err != nil {
+		log.Fatalf("readLog: %s", err)
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		var s, e int
+		if strings.Contains(lines[i], "Saving group") {
+			if strings.Contains(lines[i+1], "signal: killed") {
+				continue
+			}
+			// fmt.Printf("Detect Log: %s", lines[i])
+			s = strings.Index(lines[i], "Saving group ")
+			e = strings.Index(lines[i], "(")
+			group, err = strconv.Atoi(lines[i][s+13 : e])
+			if err != nil {
+				log.Fatalf("readLog: %s", err)
+			}
+			group++
+
+			s = strings.Index(lines[i], "-- ")
+			e = strings.LastIndex(lines[i], "/")
+			fileNumber, err = strconv.Atoi(lines[i][s+3 : e])
+			if err != nil {
+				log.Fatalf("readLog: %s", err)
+			}
+			return group, fileNumber
+		}
+	}
+	log.Fatal("No log found: ")
+	return 0, 0
+}
+
 func decode(har *hargo.Har, path string) {
 	gf, _ := os.Open(path)
 	f, err := gzip.NewReader(gf)
@@ -180,6 +227,20 @@ func decode(har *hargo.Har, path string) {
 	json.Unmarshal(bytes, &har)
 	gf.Close()
 	f.Close()
+}
+
+func readLines(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	return lines, scanner.Err()
 }
 
 // writeLines writes the lines to the given file.
@@ -284,10 +345,13 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 	if contentEncodings, ok := rw.HeaderMap["Content-Encoding"]; ok {
 		// compress body by given content_encoding
 		// only one encoding method is expected
+		var contentEncoding string
 		if len(contentEncodings) != 1 {
-			log.Fatal("Multiple content_encoding")
+			log.Printf("Multiple content_encoding: %s", strings.Join(contentEncodings, ","))
+			contentEncoding = "gzip"
+		} else {
+			contentEncoding = contentEncodings[0]
 		}
-		contentEncoding := contentEncodings[0]
 		var err error
 		var b bytes.Buffer
 
@@ -313,8 +377,6 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 			if err = wc.Close(); err != nil {
 				log.Fatal("EntryToResponse:" + err.Error())
 			}
-		case "br":
-			log.Fatal("Missing Content-Encoding:  br")
 		case "identity", "none", "utf8", "UTF-8", "utf-8", "":
 			w := bufio.NewWriter(&b)
 			if _, err = w.Write([]byte(entry.Response.Content.Text)); err != nil {
@@ -323,6 +385,13 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 			w.Flush()
 		default:
 			log.Println("Missing Content-Encoding:  " + contentEncoding)
+			// to identity
+			rw.HeaderMap["Content-Encoding"] = []string{"identity"}
+			w := bufio.NewWriter(&b)
+			if _, err = w.Write([]byte(entry.Response.Content.Text)); err != nil {
+				log.Fatal("EntryToResponse:" + err.Error())
+			}
+			w.Flush()
 		}
 
 		n, _ = rw.Body.Write(b.Bytes())
