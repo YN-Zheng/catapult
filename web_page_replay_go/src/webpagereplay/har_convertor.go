@@ -27,7 +27,6 @@ import (
 	"strings"
 
 	"github.com/mrichman/hargo"
-	"github.com/shirou/gopsutil/v3/mem"
 	"github.com/urfave/cli"
 	"golang.org/x/net/http/httpguts"
 )
@@ -81,10 +80,11 @@ func (cfg *HarConvertorConfig) HarConvert(c *cli.Context) {
 	}
 	switch mode := fi.Mode(); {
 	case mode.IsDir():
-		// if convert all .har.gz files in one folder: HttpArchive -> HttpArchive.wprgo
+		// convert all .har.gz files in one folder:
+		// Will generate: ./wprgo/*.wprgo and ./hostnames/*.txt. * starts from 0. Each group contains approximate 150 websites
 		convertHars(cfg.harFile)
 	case mode.IsRegular():
-		// if convert single har file: example.har -> example.har.wprgo
+		// convert single har file: example.har -> example.har.wprgo
 		convertSingleHar(cfg)
 	}
 	log.Println("Conversion completed")
@@ -111,7 +111,7 @@ func listHarGz(harFile string) []os.FileInfo {
 	return gzs
 }
 
-// convertHars will convert all har.gz files into one .wprgo archive.
+// convertHars will convert all har.gz files into serveral .wprgo archive.
 // example: cfg.harFile = 'tmp/HttpArchive'.
 // Then all *.har.gz in directory 'tmp/HttpArchive' will be read and write into tmp/HttpArchive/wprgo/*.wprgo
 // 'hostnames/*.txt' will also be generated in that directory, summarying all websites that has been recored in *.wprgo Archive.
@@ -119,26 +119,22 @@ func convertHars(harFile string) {
 	os.Mkdir(harFile+"/wprgo/", 0700)
 	os.Mkdir(harFile+"/hostnames/", 0700)
 	// make a list of *.har.gz files
-	v, _ := mem.VirtualMemory()
 	gzs := listHarGz(harFile)
 	var (
 		har       hargo.Har
 		archive   *WritableArchive
 		hostnames []string
 		err       error
-		m         runtime.MemStats
-		mT        uint64
 	)
 
 	// divide into groups
 	groupSize := 0
-	mT = (v.Total - v.Active) / 3
-	runtime.ReadMemStats(&m)
+	groupSizeThreshold := 300 // Better method. Instead of checking system's memory, check the summed unzipped size.
 
 	hostnames = make([]string, 0)
 	group, fileNumber := continueFromLog("./nohup.out")
 	if group == 0 {
-		log.Printf("Conversion started: %d files in total. Initial activate memory: %dMB. Thread hold: %dMB", len(gzs), v.Active>>20, mT>>20)
+		log.Printf("Conversion started: %d files in total. ", len(gzs))
 	} else {
 		log.Printf("Conversion continued from group: %5d, file: %5d", group, fileNumber)
 	}
@@ -147,7 +143,7 @@ func convertHars(harFile string) {
 		if i < fileNumber {
 			continue
 		}
-		if groupSize>>20 > 300 {
+		if groupSize>>20 > groupSizeThreshold {
 			log.Printf("Saving group %d(%d files) \t -- %d/%d ", group, len(hostnames), i, len(gzs))
 			if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(group)+".txt"); err != nil {
 				log.Fatalf("writeLines: %s", err)
@@ -169,8 +165,7 @@ func convertHars(harFile string) {
 		}
 		bytes, _ := io.ReadAll(hargo.NewReader(f))
 		groupSize += len(bytes)
-		runtime.ReadMemStats(&m)
-		log.Printf("Converting:\t%6d : %s %6dKB. Group%4d, size: %4dMB, Alloc: %4dMB", i, gzfile.Name(), len(bytes)>>10, group, groupSize>>20, m.Alloc>>20)
+		log.Printf("Converting:\t%6d : %s %6dKB. Group%4d, size: %4dMB", i, gzfile.Name(), len(bytes)>>10, group, groupSize>>20)
 		json.Unmarshal(bytes, &har)
 		gf.Close()
 		f.Close()
@@ -180,8 +175,11 @@ func convertHars(harFile string) {
 }
 
 func continueFromLog(logPath string) (int, int) {
-	// e.g. :2021/03/02 11:28:13 Saving group 60(157 files) 	 -- 10062/491484
-	// return: group = 60, fileNumber = 10062
+	// e.g. if OOM occurs, the last 2 line will be like:
+	// 2021/03/02 11:28:13 Saving group 60(157 files) 	 -- 10062/491484
+	// signal: killed
+	// We just need to find the last successfully saved group number and corresponding file number to restart program.
+	// e.g. return: group = 59, fileNumber =  9905
 	lines, err := readLines(logPath)
 	var group, fileNumber int
 	if err != nil {
@@ -211,7 +209,7 @@ func continueFromLog(logPath string) (int, int) {
 			return group, fileNumber
 		}
 	}
-	log.Fatal("No log found: ")
+	log.Println("No continue point found.")
 	return 0, 0
 }
 
