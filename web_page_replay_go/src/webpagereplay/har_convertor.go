@@ -44,6 +44,8 @@ const (
 	MB = 1 << 20
 )
 
+var logPath = "log.log"
+
 func (cfg *HarConvertorConfig) Flags() []cli.Flag {
 	return []cli.Flag{
 		cli.StringFlag{
@@ -71,8 +73,18 @@ func (cfg *HarConvertorConfig) Flags() []cli.Flag {
 	}
 }
 
-func (cfg *HarConvertorConfig) HarConvert(c *cli.Context) {
+func initialLog() *os.File {
+	f, err := os.OpenFile(logPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("error opening file: %v", err)
+	}
+	log.SetOutput(f)
+	return f
+}
 
+func (cfg *HarConvertorConfig) HarConvert(c *cli.Context) {
+	f := initialLog()
+	defer f.Close()
 	// convert .har file(s).Note that cfg.harFile can be a folder or a single file
 	fi, err := os.Stat(cfg.harFile)
 	if err != nil {
@@ -129,12 +141,12 @@ func convertHars(harFile string) {
 
 	// divide into groups
 	groupSize := 0
-	groupSizeThreshold := 300 // Better method. Instead of checking system's memory, check the summed unzipped size.
+	groupSizeThreshold := 400 // Better method. Instead of checking system's memory, check the summed unzipped size.
 
 	hostnames = make([]string, 0)
-	group, fileNumber := continueFromLog("./nohup.out")
+	group, fileNumber := continueFromLog()
 	if group == 0 {
-		log.Printf("Conversion started: %d files in total. ", len(gzs))
+		log.Printf("Conversion started: %d files in %s. ", len(gzs), harFile)
 	} else {
 		log.Printf("Conversion continued from group: %5d, file: %5d", group, fileNumber)
 	}
@@ -174,7 +186,7 @@ func convertHars(harFile string) {
 	}
 }
 
-func continueFromLog(logPath string) (int, int) {
+func continueFromLog() (int, int) {
 	// e.g. if OOM occurs, the last 2 line will be like:
 	// 2021/03/02 11:28:13 Saving group 60(157 files) 	 -- 10062/491484
 	// signal: killed
@@ -183,14 +195,12 @@ func continueFromLog(logPath string) (int, int) {
 	lines, err := readLines(logPath)
 	var group, fileNumber int
 	if err != nil {
-		log.Fatalf("readLog: %s", err)
+		log.Println("No log file found.")
+		return 0, 0
 	}
-	for i := len(lines) - 1; i >= 0; i-- {
+	for i := len(lines) - 3; i >= 0; i-- {
 		var s, e int
 		if strings.Contains(lines[i], "Saving group") {
-			if strings.Contains(lines[i+1], "signal: killed") {
-				continue
-			}
 			// fmt.Printf("Detect Log: %s", lines[i])
 			s = strings.Index(lines[i], "Saving group ")
 			e = strings.Index(lines[i], "(")

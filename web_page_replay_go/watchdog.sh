@@ -1,14 +1,14 @@
 # watch dog for process wpr
-
-
+crawl_date=$1
+cd "${0%/*}" # cd folder of this script
 while true
 do
 	pgrep -x wpr > /dev/null
 	if [[ $? -gt 0 ]]
 	then 
 		now=$(date)
-		printf "%s :: Process 'wpr' not found, restart\n" "$now"
-		nohup /home/yongnian/sdk/go1.16/bin/go run src/wpr.go convert --har_file=/home/yongnian/Downloads/Http\ Archive/chrome-Apr_1_2016 &
+		printf "%s :: Run wpr.go convert\n" "$now"
+		go run src/wpr.go convert --har_file=/tmp/HttpArchive/$crawl_date
 	fi
 	sleep 10
 done

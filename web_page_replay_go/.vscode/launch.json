@@ -44,9 +44,7 @@
             "showLog": false,
             "args": [
                 "convert",
-                "--har_file=/tmp/webdata/HttpArchive",
-                "--https_cert_file=wpr_cert.pem",
-                "--https_key_file=wpr_key.pem"
+                "--har_file=/tmp/HttpArchive/Dec_15_2015"
             ]
         }
     ]
