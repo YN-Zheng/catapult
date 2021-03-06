@@ -144,7 +144,7 @@ func convertHars(harFile string) {
 	groupSizeThreshold := 400 // Better method. Instead of checking system's memory, check the summed unzipped size.
 
 	hostnames = make([]string, 0)
-	group, fileNumber := continueFromLog()
+	group, fileNumber := 0, 0 //continueFromLog()
 	if group == 0 {
 		log.Printf("Conversion started: %d files in %s. ", len(gzs), harFile)
 	} else {
