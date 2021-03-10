@@ -144,32 +144,13 @@ func convertHars(harFile string) {
 	groupSizeThreshold := 400 // Better method. Instead of checking system's memory, check the summed unzipped size.
 
 	hostnames = make([]string, 0)
-	group, fileNumber := 0, 0 //continueFromLog()
-	if group == 0 {
-		log.Printf("Conversion started: %d files in %s. ", len(gzs), harFile)
-	} else {
-		log.Printf("Conversion continued from group: %5d, file: %5d", group, fileNumber)
-	}
+	group := 0 //continueFromLog()
+	log.Printf("Conversion started: %d files in %s. ", len(gzs), harFile)
 	archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo")
+	if err != nil {
+		log.Fatal(err.Error())
+	}
 	for i, gzfile := range gzs {
-		if i < fileNumber {
-			continue
-		}
-		if groupSize>>20 > groupSizeThreshold {
-			log.Printf("Saving group %d(%d files) \t -- %d/%d ", group, len(hostnames), i, len(gzs))
-			if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(group)+".txt"); err != nil {
-				log.Fatalf("writeLines: %s", err)
-			}
-			runtime.GC()
-			archive.Close()
-			group++
-			groupSize = 0
-			if archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo"); err != nil {
-				log.Fatalf("openWriteableArchive: %s", err)
-			}
-			hostnames = make([]string, 0)
-
-		}
 		gf, _ := os.Open(harFile + "/" + gzfile.Name())
 		f, err := gzip.NewReader(gf)
 		if err != nil {
@@ -183,6 +164,26 @@ func convertHars(harFile string) {
 		f.Close()
 		archive.AppendHar(har)
 		hostnames = append(hostnames, har.Log.Entries[0].Request.URL+","+gzfile.Name())
+		if i == len(gzs)-1 {
+			log.Printf("Saving group %d(%d files) \t -- %d/%d ", group, len(hostnames), i, len(gzs))
+			if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(group)+".txt"); err != nil {
+				log.Fatalf("writeLines: %s", err)
+			}
+			archive.Close()
+		} else if groupSize>>20 > groupSizeThreshold {
+			log.Printf("Saving group %d(%d files) \t -- %d/%d ", group, len(hostnames), i, len(gzs))
+			if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(group)+".txt"); err != nil {
+				log.Fatalf("writeLines: %s", err)
+			}
+			runtime.GC()
+			archive.Close()
+			group++
+			groupSize = 0
+			if archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo"); err != nil {
+				log.Fatalf("openWriteableArchive: %s", err)
+			}
+			hostnames = make([]string, 0)
+		}
 	}
 }
 
@@ -353,20 +354,16 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 	if contentEncodings, ok := rw.HeaderMap["Content-Encoding"]; ok {
 		// compress body by given content_encoding
 		// only one encoding method is expected
-		var contentEncoding string
-		if len(contentEncodings) != 1 {
-			log.Printf("Multiple content_encoding: %s", strings.Join(contentEncodings, ","))
-			contentEncoding = "gzip"
-		} else {
-			contentEncoding = contentEncodings[0]
-		}
+		ce := req.Header.Get("Accept-Encoding")
+		req.Header.Set("Accept-Encoding", strings.TrimSuffix(ce, ", br"))
+		contentEncoding := strings.ToLower(strings.Join(contentEncodings, ","))
+
 		var err error
 		var b bytes.Buffer
-
 		var wc io.WriteCloser
 
-		switch contentEncoding {
-		case "gzip", "x_gzip":
+		if strings.Contains(contentEncoding, "gzip") || strings.Contains(contentEncoding, "br") {
+			rw.HeaderMap["Content-Encoding"] = []string{"gzip"}
 			wc = gzip.NewWriter(&b)
 			if _, err = wc.Write([]byte(entry.Response.Content.Text)); err != nil {
 				log.Fatal("EntryToResponse:" + err.Error())
@@ -374,26 +371,16 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 			if err = wc.Close(); err != nil {
 				log.Fatal("EntryToResponse:" + err.Error())
 			}
-		case "deflate":
-			wc, err = flate.NewWriter(&b, -1)
-			if err != nil {
-				log.Fatal("EntryToResponse:" + err.Error())
-			}
+		} else if strings.Contains(contentEncoding, "deflate") {
+			rw.HeaderMap["Content-Encoding"] = []string{"deflate"}
+			wc, _ = flate.NewWriter(&b, -1)
 			if _, err = wc.Write([]byte(entry.Response.Content.Text)); err != nil {
 				log.Fatal("EntryToResponse:" + err.Error())
 			}
 			if err = wc.Close(); err != nil {
 				log.Fatal("EntryToResponse:" + err.Error())
 			}
-		case "identity", "none", "utf8", "UTF-8", "utf-8", "":
-			w := bufio.NewWriter(&b)
-			if _, err = w.Write([]byte(entry.Response.Content.Text)); err != nil {
-				log.Fatal("EntryToResponse:" + err.Error())
-			}
-			w.Flush()
-		default:
-			log.Println("Missing Content-Encoding:  " + contentEncoding)
-			// to identity
+		} else { // to identity
 			rw.HeaderMap["Content-Encoding"] = []string{"identity"}
 			w := bufio.NewWriter(&b)
 			if _, err = w.Write([]byte(entry.Response.Content.Text)); err != nil {
@@ -404,8 +391,6 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 
 		n, _ = rw.Body.Write(b.Bytes())
 		b.Reset()
-		//TODO: br, deflate...
-
 	} else {
 		n, _ = rw.Body.WriteString(entry.Response.Content.Text)
 	}
