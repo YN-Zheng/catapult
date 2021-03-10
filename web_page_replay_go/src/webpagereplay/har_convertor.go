@@ -144,6 +144,7 @@ func convertHars(harFile string) {
 
 	hostnames = make([]string, 0)
 	group := 0
+	log.Printf("------------------------------------------------------------")
 	log.Printf("Conversion started: %d files in %s. ", len(gzs), harFile)
 	archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo")
 	if err != nil {
@@ -278,7 +279,7 @@ func assertCompleteEntry(entry hargo.Entry) bool {
 		log.Println(err.Error())
 		return false
 	}
-	if u.Host == "" || u.Scheme == "" || entry.Request.Method == "" {
+	if u.Host == "" || u.Scheme == "" {
 		log.Printf("Damaged entry -- Missing host and scheme: %v %v", entry.Request.Method, entry.Request.URL)
 		return false
 	}
