@@ -133,7 +133,6 @@ func convertHars(harFile string) {
 	// make a list of *.har.gz files
 	gzs := listHarGz(harFile)
 	var (
-		har       hargo.Har
 		archive   *WritableArchive
 		hostnames []string
 		err       error
@@ -144,7 +143,7 @@ func convertHars(harFile string) {
 	groupSizeThreshold := 400 // Better method. Instead of checking system's memory, check the summed unzipped size.
 
 	hostnames = make([]string, 0)
-	group := 0 //continueFromLog()
+	group := 0
 	log.Printf("Conversion started: %d files in %s. ", len(gzs), harFile)
 	archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo")
 	if err != nil {
@@ -159,6 +158,7 @@ func convertHars(harFile string) {
 		bytes, _ := io.ReadAll(hargo.NewReader(f))
 		groupSize += len(bytes)
 		log.Printf("Converting:\t%6d : %s %6dKB. Group%4d, size: %4dMB", i, gzfile.Name(), len(bytes)>>10, group, groupSize>>20)
+		var har hargo.Har
 		json.Unmarshal(bytes, &har)
 		gf.Close()
 		f.Close()
@@ -185,43 +185,6 @@ func convertHars(harFile string) {
 			hostnames = make([]string, 0)
 		}
 	}
-}
-
-func continueFromLog() (int, int) {
-	// e.g. if OOM occurs, the last 2 line will be like:
-	// 2021/03/02 11:28:13 Saving group 60(157 files) 	 -- 10062/491484
-	// signal: killed
-	// We just need to find the last successfully saved group number and corresponding file number to restart program.
-	// e.g. return: group = 59, fileNumber =  9905
-	lines, err := readLines(logPath)
-	var group, fileNumber int
-	if err != nil {
-		log.Println("No log file found.")
-		return 0, 0
-	}
-	for i := len(lines) - 3; i >= 0; i-- {
-		var s, e int
-		if strings.Contains(lines[i], "Saving group") {
-			// fmt.Printf("Detect Log: %s", lines[i])
-			s = strings.Index(lines[i], "Saving group ")
-			e = strings.Index(lines[i], "(")
-			group, err = strconv.Atoi(lines[i][s+13 : e])
-			if err != nil {
-				log.Fatalf("readLog: %s", err)
-			}
-			group++
-
-			s = strings.Index(lines[i], "-- ")
-			e = strings.LastIndex(lines[i], "/")
-			fileNumber, err = strconv.Atoi(lines[i][s+3 : e])
-			if err != nil {
-				log.Fatalf("readLog: %s", err)
-			}
-			return group, fileNumber
-		}
-	}
-	log.Println("No continue point found.")
-	return 0, 0
 }
 
 func decode(har *hargo.Har, path string) {
@@ -313,16 +276,16 @@ func assertCompleteEntry(entry hargo.Entry) bool {
 	u, err := url.Parse(entry.Request.URL)
 	if err != nil {
 		log.Println(err.Error())
-		// return false
+		return false
 	}
-	if u.Host == "" || u.Scheme == "" {
-		log.Printf("Damaged entry -- incomplete Request: %s %s", entry.Request.Method, entry.Request.URL)
-		// return false
+	if u.Host == "" || u.Scheme == "" || entry.Request.Method == "" {
+		log.Printf("Damaged entry -- Missing host and scheme: %v %v", entry.Request.Method, entry.Request.URL)
+		return false
 	}
-	if entry.Time > 50000 {
-		log.Printf("Damaged entry -- timeout: %.0f ms %s URL: %s", entry.Time, entry.Request.Method, entry.Request.URL)
-		// return false
-	}
+	// if entry.Time > 50000 {
+	// 	log.Printf("Damaged entry -- timeout: %.0f ms %s URL: %s", entry.Time, entry.Request.Method, entry.Request.URL)
+	// 	// return false
+	// }
 
 	return true
 }
