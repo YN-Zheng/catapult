@@ -313,15 +313,15 @@ func assertCompleteEntry(entry hargo.Entry) bool {
 	u, err := url.Parse(entry.Request.URL)
 	if err != nil {
 		log.Println(err.Error())
-		return false
+		// return false
 	}
-	if u.Host == "" || u.Scheme == "" || entry.Request.Method == "" {
+	if u.Host == "" || u.Scheme == "" {
 		log.Printf("Damaged entry -- incomplete Request: %s %s", entry.Request.Method, entry.Request.URL)
-		return false
+		// return false
 	}
 	if entry.Time > 50000 {
 		log.Printf("Damaged entry -- timeout: %.0f ms %s URL: %s", entry.Time, entry.Request.Method, entry.Request.URL)
-		return false
+		// return false
 	}
 
 	return true
@@ -354,8 +354,7 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 	if contentEncodings, ok := rw.HeaderMap["Content-Encoding"]; ok {
 		// compress body by given content_encoding
 		// only one encoding method is expected
-		ce := req.Header.Get("Accept-Encoding")
-		req.Header.Set("Accept-Encoding", strings.TrimSuffix(ce, ", br"))
+
 		contentEncoding := strings.ToLower(strings.Join(contentEncodings, ","))
 
 		var err error
