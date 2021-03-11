@@ -140,7 +140,7 @@ func convertHars(harFile string) {
 
 	// divide into groups
 	groupSize := 0
-	groupSizeThreshold := 400 // Better method. Instead of checking system's memory, check the summed unzipped size.
+	groupSizeThreshold := 1024 // Check the summed unzipped size.
 
 	hostnames = make([]string, 0)
 	group := 0
