@@ -157,14 +157,18 @@ func convertHars(harFile string) {
 			log.Fatal(err.Error())
 		}
 		bytes, _ := io.ReadAll(hargo.NewReader(f))
-		groupSize += len(bytes)
 		log.Printf("Converting:\t%6d : %s %6dKB. Group%4d, size: %4dMB", i, gzfile.Name(), len(bytes)>>10, group, groupSize>>20)
 		var har hargo.Har
-		json.Unmarshal(bytes, &har)
+		err = json.Unmarshal(bytes, &har)
 		gf.Close()
 		f.Close()
+		if err != nil {
+			log.Printf("Damaged Har -- %s", err.Error())
+			continue
+		}
+		groupSize += len(bytes)
 		archive.AppendHar(har)
-		hostnames = append(hostnames, har.Log.Entries[0].Request.URL+","+gzfile.Name())
+		hostnames = append(hostnames, getHostname(har)+","+gzfile.Name())
 		if i == len(gzs)-1 {
 			log.Printf("Saving group %d(%d files) \t -- %d/%d ", group, len(hostnames), i, len(gzs))
 			if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(group)+".txt"); err != nil {
@@ -186,6 +190,21 @@ func convertHars(harFile string) {
 			hostnames = make([]string, 0)
 		}
 	}
+}
+
+func getHostname(har hargo.Har) string {
+
+	for _, entry := range har.Log.Entries {
+		u, err := url.Parse(entry.Request.URL)
+		if err != nil || u.Path != "" {
+			continue
+		}
+		return entry.Request.URL
+	}
+	//
+	title := har.Log.Pages[0].Title
+	i := strings.Index(title, "http")
+	return title[i:]
 }
 
 func decode(har *hargo.Har, path string) {
