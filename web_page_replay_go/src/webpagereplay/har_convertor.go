@@ -192,6 +192,14 @@ func convertHars(harFile string) {
 	}
 }
 
+func fix_invalid_bytes(data []byte) []byte {
+	var c byte
+	for c = 0x00; c < 0x20; c++ {
+		data = bytes.ReplaceAll(data, []byte{c}, nil)
+	}
+	return data
+}
+
 func getHostname(har hargo.Har) string {
 
 	for _, entry := range har.Log.Entries {
@@ -344,33 +352,20 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 		var b bytes.Buffer
 		var wc io.WriteCloser
 
-		if strings.Contains(contentEncoding, "gzip") || strings.Contains(contentEncoding, "br") {
-			rw.HeaderMap["Content-Encoding"] = []string{"gzip"}
-			wc = gzip.NewWriter(&b)
-			if _, err = wc.Write([]byte(entry.Response.Content.Text)); err != nil {
-				log.Fatal("EntryToResponse:" + err.Error())
-			}
-			if err = wc.Close(); err != nil {
-				log.Fatal("EntryToResponse:" + err.Error())
-			}
-		} else if strings.Contains(contentEncoding, "deflate") {
+		if strings.Contains(contentEncoding, "deflate") {
 			rw.HeaderMap["Content-Encoding"] = []string{"deflate"}
 			wc, _ = flate.NewWriter(&b, -1)
-			if _, err = wc.Write([]byte(entry.Response.Content.Text)); err != nil {
-				log.Fatal("EntryToResponse:" + err.Error())
-			}
-			if err = wc.Close(); err != nil {
-				log.Fatal("EntryToResponse:" + err.Error())
-			}
-		} else { // to identity
-			rw.HeaderMap["Content-Encoding"] = []string{"identity"}
-			w := bufio.NewWriter(&b)
-			if _, err = w.Write([]byte(entry.Response.Content.Text)); err != nil {
-				log.Fatal("EntryToResponse:" + err.Error())
-			}
-			w.Flush()
+		} else { // default compression: gzip; (otherwise: unknown compression: identity)
+			req.Header.Set("Accept-Encoding", "gzip")
+			rw.HeaderMap["Content-Encoding"] = []string{"gzip"}
+			wc = gzip.NewWriter(&b)
 		}
-
+		if _, err = wc.Write([]byte(entry.Response.Content.Text)); err != nil {
+			log.Fatal("EntryToResponse:" + err.Error())
+		}
+		if err = wc.Close(); err != nil {
+			log.Fatal("EntryToResponse:" + err.Error())
+		}
 		n, _ = rw.Body.Write(b.Bytes())
 		b.Reset()
 	} else {
