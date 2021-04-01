@@ -267,10 +267,10 @@ func convertSingleHar(cfg *HarConvertorConfig) {
 		log.Fatal(err.Error())
 	}
 	f, err := os.Open(cfg.harFile)
-	defer f.Close()
 	if err != nil {
 		log.Fatal("Cannot open har file: ", cfg.harFile)
 	}
+	defer f.Close()
 	dec := json.NewDecoder(hargo.NewReader(f))
 	var har hargo.Har
 	dec.Decode(&har)
@@ -310,11 +310,6 @@ func assertCompleteEntry(entry hargo.Entry) bool {
 		log.Printf("Damaged entry -- Missing host and scheme: %v %v", entry.Request.Method, entry.Request.URL)
 		return false
 	}
-	// if entry.Time > 50000 {
-	// 	log.Printf("Damaged entry -- timeout: %.0f ms %s URL: %s", entry.Time, entry.Request.Method, entry.Request.URL)
-	// 	// return false
-	// }
-
 	return true
 }
 
@@ -322,8 +317,9 @@ func assertCompleteEntry(entry hargo.Entry) bool {
 func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, error) {
 
 	rw := httptest.NewRecorder()
+	ResponseHeader := make(http.Header)
 	for _, nvp := range entry.Response.Headers {
-		rw.HeaderMap.Add(nvp.Name, nvp.Value)
+		ResponseHeader.Add(nvp.Name, nvp.Value)
 	}
 	var n int
 	// For responses corresponding to fonts/image files, response body in harfile is encoded into Base64.
@@ -341,38 +337,38 @@ func EntryToResponse(entry *hargo.Entry, req *http.Request) (*http.Response, err
 		}
 	}
 
-	// Compress data according to content_encoding, so that browser can analysze it correctly
-	if contentEncodings, ok := rw.HeaderMap["Content-Encoding"]; ok {
-		// compress body by given content_encoding
-		// only one encoding method is expected
+	// Compress body according to content_encoding
+	// WprGo replay only accept gzip and deflate
+	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	var contentEncoding string
+	var err error
+	var b bytes.Buffer
+	var wc io.WriteCloser
 
-		contentEncoding := strings.ToLower(strings.Join(contentEncodings, ","))
-
-		var err error
-		var b bytes.Buffer
-		var wc io.WriteCloser
-
-		if strings.Contains(contentEncoding, "deflate") {
-			rw.HeaderMap["Content-Encoding"] = []string{"deflate"}
-			wc, _ = flate.NewWriter(&b, -1)
-		} else { // default compression: gzip; (otherwise: unknown compression: identity)
-			req.Header.Set("Accept-Encoding", "gzip")
-			rw.HeaderMap["Content-Encoding"] = []string{"gzip"}
-			wc = gzip.NewWriter(&b)
-		}
-		if _, err = wc.Write([]byte(entry.Response.Content.Text)); err != nil {
-			log.Fatal("EntryToResponse:" + err.Error())
-		}
-		if err = wc.Close(); err != nil {
-			log.Fatal("EntryToResponse:" + err.Error())
-		}
-		n, _ = rw.Body.Write(b.Bytes())
-		b.Reset()
+	if contentEncodings, ok := ResponseHeader["Content-Encoding"]; ok {
+		contentEncoding = strings.ToLower(strings.Join(contentEncodings, ","))
 	} else {
-		n, _ = rw.Body.WriteString(entry.Response.Content.Text)
+		contentEncoding = "gzip"
 	}
 
+	if strings.Contains(contentEncoding, "deflate") {
+		ResponseHeader["Content-Encoding"] = []string{"deflate"}
+		wc, _ = flate.NewWriter(&b, -1)
+	} else {
+		// default compression: gzip
+		ResponseHeader["Content-Encoding"] = []string{"gzip"}
+		wc = gzip.NewWriter(&b)
+	}
+	if _, err = wc.Write([]byte(entry.Response.Content.Text)); err != nil {
+		log.Fatal("EntryToResponse:" + err.Error())
+	}
+	if err = wc.Close(); err != nil {
+		log.Fatal("EntryToResponse:" + err.Error())
+	}
+	n, _ = rw.Body.Write(b.Bytes())
+	b.Reset()
 	rw.Code = entry.Response.Status
+	rw.HeaderMap = ResponseHeader
 	resp := rw.Result()
 
 	resp.Proto = strings.ToUpper(entry.Response.HTTPVersion)
