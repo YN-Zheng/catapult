@@ -193,7 +193,7 @@ func convertHars(harFile string) {
 		if url, ok = name_url[gzfile.Name()]; !ok {
 			url = getSite(har)
 		}
-		sites = append(sites, url+","+gzfile.Name())
+		sites = append(sites, gzfile.Name()+","+url)
 		if i == len(gzs)-1 {
 			log.Printf("Saving group %d(%d files) \t -- %d/%d ", group, len(sites), i, len(gzs))
 			if err := writeLines(sites, harFile+"/sites/"+strconv.Itoa(group)+".txt"); err != nil {
