@@ -30,6 +30,7 @@ import (
 	"github.com/urfave/cli"
 	"golang.org/x/net/http/httpguts"
 )
+import "path/filepath"
 
 type HarConvertorConfig struct {
 	harFile, outputFile string
@@ -93,7 +94,7 @@ func (cfg *HarConvertorConfig) HarConvert(c *cli.Context) {
 	switch mode := fi.Mode(); {
 	case mode.IsDir():
 		// convert all .har.gz files in one folder:
-		// Will generate: ./wprgo/*.wprgo and ./hostnames/*.txt. * starts from 0. Each group contains approximate 150 websites
+		// Will generate: ./wprgo/*.wprgo and ./sites/*.txt. * starts from 0. Each group contains approximate 150 websites
 		convertHars(cfg.harFile)
 	case mode.IsRegular():
 		// convert single har file: example.har -> example.har.wprgo
@@ -101,6 +102,24 @@ func (cfg *HarConvertorConfig) HarConvert(c *cli.Context) {
 	}
 	log.Println("Conversion completed")
 
+}
+func getUrlMapping(harFile string) map[string]string {
+	list_path := filepath.Join(harFile, "sites.txt")
+	name_url := make(map[string]string)
+	list, err := readLines(list_path)
+	if err != nil {
+		return name_url
+	}
+	for _, l := range list {
+		i := strings.Index(l, ",")
+		if i == -1 {
+			return nil
+		}
+		url := l[i+1:]
+		name := l[0:i]
+		name_url[name] = url
+	}
+	return name_url
 }
 
 func listHarGz(harFile string) []os.FileInfo {
@@ -126,23 +145,26 @@ func listHarGz(harFile string) []os.FileInfo {
 // convertHars will convert all har.gz files into serveral .wprgo archive.
 // example: cfg.harFile = 'tmp/HttpArchive'.
 // Then all *.har.gz in directory 'tmp/HttpArchive' will be read and write into tmp/HttpArchive/wprgo/*.wprgo
-// 'hostnames/*.txt' will also be generated in that directory, summarying all websites that has been recored in *.wprgo Archive.
+// 'sites/*.txt' will also be generated in that directory, summarying all websites that has been recored in *.wprgo Archive.
 func convertHars(harFile string) {
 	os.Mkdir(harFile+"/wprgo/", 0700)
-	os.Mkdir(harFile+"/hostnames/", 0700)
+	os.Mkdir(harFile+"/sites/", 0700)
 	// make a list of *.har.gz files
 	gzs := listHarGz(harFile)
+	name_url := getUrlMapping(harFile)
 	var (
-		archive   *WritableArchive
-		hostnames []string
-		err       error
+		archive *WritableArchive
+		sites   []string
+		url     string
+		err     error
+		ok      bool
 	)
 
 	// divide into groups
 	groupSize := 0
 	groupSizeThreshold := 1024 // Check the summed unzipped size.
 
-	hostnames = make([]string, 0)
+	sites = make([]string, 0)
 	group := 0
 	log.Printf("------------------------------------------------------------")
 	log.Printf("Conversion started: %d files in %s. ", len(gzs), harFile)
@@ -168,16 +190,19 @@ func convertHars(harFile string) {
 		}
 		groupSize += len(bytes)
 		archive.AppendHar(har)
-		hostnames = append(hostnames, getHostname(har)+","+gzfile.Name())
+		if url, ok = name_url[gzfile.Name()]; !ok {
+			url = getSite(har)
+		}
+		sites = append(sites, url+","+gzfile.Name())
 		if i == len(gzs)-1 {
-			log.Printf("Saving group %d(%d files) \t -- %d/%d ", group, len(hostnames), i, len(gzs))
-			if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(group)+".txt"); err != nil {
+			log.Printf("Saving group %d(%d files) \t -- %d/%d ", group, len(sites), i, len(gzs))
+			if err := writeLines(sites, harFile+"/sites/"+strconv.Itoa(group)+".txt"); err != nil {
 				log.Fatalf("writeLines: %s", err)
 			}
 			archive.Close()
 		} else if groupSize>>20 > groupSizeThreshold {
-			log.Printf("Saving group %d(%d files) \t -- %d/%d ", group, len(hostnames), i, len(gzs))
-			if err := writeLines(hostnames, harFile+"/hostnames/"+strconv.Itoa(group)+".txt"); err != nil {
+			log.Printf("Saving group %d(%d files) \t -- %d/%d ", group, len(sites), i, len(gzs))
+			if err := writeLines(sites, harFile+"/sites/"+strconv.Itoa(group)+".txt"); err != nil {
 				log.Fatalf("writeLines: %s", err)
 			}
 			runtime.GC()
@@ -187,7 +212,7 @@ func convertHars(harFile string) {
 			if archive, err = OpenWritableArchive(harFile + "/wprgo/" + strconv.Itoa(group) + ".wprgo"); err != nil {
 				log.Fatalf("openWriteableArchive: %s", err)
 			}
-			hostnames = make([]string, 0)
+			sites = make([]string, 0)
 		}
 	}
 }
@@ -200,8 +225,9 @@ func fix_invalid_bytes(data []byte) []byte {
 	return data
 }
 
-func getHostname(har hargo.Har) string {
+func getSite(har hargo.Har) string {
 
+	// From entry.Request.ULR
 	for _, entry := range har.Log.Entries {
 		u, err := url.Parse(entry.Request.URL)
 		if err != nil || u.Path != "" {
@@ -209,7 +235,7 @@ func getHostname(har hargo.Har) string {
 		}
 		return entry.Request.URL
 	}
-	//
+	// From Title of the Har file
 	title := har.Log.Pages[0].Title
 	i := strings.Index(title, "http")
 	return title[i:]
@@ -231,7 +257,7 @@ func decode(har *hargo.Har, path string) {
 
 func readLines(path string) ([]string, error) {
 	file, err := os.Open(path)
-	if err != nil {
+	if os.IsNotExist(err) {
 		return nil, err
 	}
 	defer file.Close()
