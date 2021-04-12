@@ -176,7 +176,8 @@ func convertHars(harFile string) {
 		gf, _ := os.Open(harFile + "/" + gzfile.Name())
 		f, err := gzip.NewReader(gf)
 		if err != nil {
-			log.Fatal(err.Error())
+			log.Printf("Damaged Har -- %s", err.Error())
+			continue
 		}
 		bytes, _ := io.ReadAll(hargo.NewReader(f))
 		log.Printf("Converting:\t%6d : %s %6dKB. Group%4d, size: %4dMB", i, gzfile.Name(), len(bytes)>>10, group, groupSize>>20)
@@ -215,14 +216,6 @@ func convertHars(harFile string) {
 			sites = make([]string, 0)
 		}
 	}
-}
-
-func fix_invalid_bytes(data []byte) []byte {
-	var c byte
-	for c = 0x00; c < 0x20; c++ {
-		data = bytes.ReplaceAll(data, []byte{c}, nil)
-	}
-	return data
 }
 
 func getSite(har hargo.Har) string {
